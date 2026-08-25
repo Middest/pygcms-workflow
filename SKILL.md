@@ -226,3 +226,23 @@ results/
 - [x] EI 改名后重新分类（audit_trail 逐条记录）
 - [x] FINAL 每样品面积闭合 100%（4 样品全 100.0%）
 - [x] 关键 Stage 失败即停止并明确报错
+
+---
+
+## 8. 人工验证（Human Verification）
+
+自动 QC 保证"管道正确"，人工验证保证"科学正确"。**每次 workflow 跑完后、
+结果进入统计/写作之前**，按 `references/human-verification-guide.md` 执行
+六层验证：
+
+1. **自动 QC 审查**：final_qc.json 全 PASS、manifest 无意外 SKIP
+2. **数据完整性对账**：峰数链 原始→clean→final 逐步核对
+3. **关键决策抽样复核**（最重要）：EI 裁决与 TMAH 剔除各抽 10-20%，
+   用 QGD 原始谱肉眼确认（cosine、m/z 58 谱型）
+4. **谱级金标准**：支撑核心结论的关键化合物逐个 EI 谱 vs NIST 库对比，
+   标注 MSI 置信度
+5. **统计与解释审查**：n=1 无推断、R_MP 半定量表述、相对面积措辞合规
+6. **可复现性**：同 config 重跑一致；SI 70/80/90 方向稳定
+
+**核心原则**：发现任何问题 → 改配置/决策 → 重跑脚本，禁止手工改 CSV；
+验证记录存档（`human-verification.md`），投稿时可应对审稿。
