@@ -1,0 +1,7 @@
+{
+  "_notes": "键 = TXT/QGD 文件前缀编号，值 = 处理名（与 manuscript 一致）。复制为 sample_map.json 使用。",
+  "1": "CK",
+  "2": "BC7.5",
+  "3": "BC15",
+  "4": "BC30"
+}

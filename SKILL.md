@@ -176,3 +176,53 @@ python <skill_dir>/pygcms-batch/scripts/diag_trimethylamine.py
 - **good-story / nature-writing**：叙事与写作
 - **experimental-design-validator**：设计复核
 - 记忆检查点：`pygcms-data-rigor-2026.md`（2026-08-01 严谨性工作流实证）
+
+---
+
+## 7. 工程化流水线（v0.1，一条命令跑通 Stage 0-5）
+
+> 2026-08-25 依据外部审查（saas-nexus-1787639405595）实施的工程化改造：
+> 统一配置 + 永久 peak_id + 改名/删除分离 + 数据契约 + 总编排。
+
+### 一键运行
+```bash
+python scripts/run_workflow.py --config config/config.example.yaml
+```
+（复制 `config.example.yaml` 为 `config.yaml` 并填写路径；`--batch_scripts` 可指定
+pygcms-batch 脚本目录，默认自动探测 `.claude/skills` 布局。）
+
+### 数据契约（Stage 输入/输出标准）
+```
+results/
+├── 00_preflight/preflight_report.json   G0 输入检查（TXT/QGD/sample_map/依赖）
+├── 01_clean/features_clean.csv          G1 峰级数据（peak_id/name_raw/current/status）
+├── 02_verify/verification_report.md     G2 验证报告 + aligned_peak_matrix.csv
+├── 03_ei/ei_decisions.csv               G3 EI 裁决（UNIFIED/GENUINE_DIFF/NO_SPECTRA）
+├── 04_tmah/tmah_decisions.csv           G4 TMAH 谱检（EXCLUDE/REVIEW/NO_SPECTRUM）
+├── 05_final/features_final.csv          G5 FINAL（EI 改名+重新分类+TMAH 剔除+重归一化）
+│           class_composition_final.csv
+│           final_qc.json                （闭合/唯一性/完整性 7 项 QC）
+│           audit_trail.csv              （逐峰变更记录：RECLASS/EXCLUDE）
+└── run_manifest.json                    参数 + 各阶段 PASS/FAIL + 时间戳
+```
+
+### 关键规则（v0.1 强制）
+1. **peak_id 永久唯一**：`{sample_id}__{seq:04d}`，后续决策一律以 peak_id 关联，禁用浮点 RT 作为唯一键
+2. **name_raw 永不可改**：`compound_name_raw` 保留原始 NIST 名称；EI 裁决只写 `compound_name_current`/`class_final`
+3. **改名 ≠ 删除**：EI 裁决（改名）走 `ei_decisions.csv`，TMAH 剔除走 `tmah_decisions.csv`，两套系统独立；**禁止**把剔除语义塞进 corrections.json
+4. **Stage 3/4 只出 decision，不改数据**：真正写回统一在 Stage 5 `apply_final.py`
+5. **EI 改名后必须重新分类**：`class_final` 基于改名后的名称重算
+6. **参数唯一来源**：SI 阈值、RT 容差、EI cosine、TMAH 阈值全部从 `config.yaml` 读取，脚本内禁止硬编码
+7. **失败即停**：任一 gate 非零退出，workflow 立即停止，不产生下游数据
+
+### 10 项验收标准（v0.1 完成）
+- [x] `run_workflow.py --config` 一键启动全流程
+- [x] 无需人工修改中间 CSV
+- [x] Stage 0-5 自动连续运行（真实 POC 数据验证：G0-G5 全 PASS）
+- [x] 每个峰唯一 peak_id（516 features，0 重复）
+- [x] EI 改名 / TMAH 删除两套独立 decision
+- [x] Stage 3/4 不直接修改原始结果
+- [x] Stage 5 统一应用所有 decision（70 峰 EI 改类）
+- [x] EI 改名后重新分类（audit_trail 逐条记录）
+- [x] FINAL 每样品面积闭合 100%（4 样品全 100.0%）
+- [x] 关键 Stage 失败即停止并明确报错

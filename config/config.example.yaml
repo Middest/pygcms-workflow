@@ -1,0 +1,41 @@
+# Py-GC-MS Workflow 统一配置（示例）
+# 复制为 config.yaml 并修改路径。所有脚本从本文件读取参数——SI 阈值等参数
+# 严禁散落在各脚本中，全部以本文件为唯一来源。
+
+project:
+  name: pygcms_project
+
+input:
+  txt_dir: data/raw/txt          # NIST 导出 TXT 目录（每个样品一个 {sid}.txt）
+  qgd_dir: data/raw/qgd          # Shimadzu QGD 目录（可选，EI 裁决/TMAH 谱检需要）
+  sample_map: config/sample_map.json
+
+filters:
+  si_threshold: 70               # 唯一 SI 阈值来源（不要在各脚本中硬编码 70/80/90）
+  remove_contaminants: true
+  remove_tmah_by_name: true      # 名称剔除（TMAH_ARTIFACTS 列表）
+  renormalize: true
+
+alignment:
+  reference_sample: CK
+  rt_tolerance: 0.10             # 同批次 RT 对齐容差（min）
+
+ei:
+  enabled: true                  # false 则跳过 Stage 3（无 QGD 时）
+  cosine_threshold: 0.85
+  top_ions: 12
+  spectrum_rt_tolerance: 0.08
+
+tmah:
+  enabled: true                  # false 则跳过 Stage 4（无 QGD 时）
+  spectral_check: true
+  mz58_fraction_threshold: 0.12
+  rt_tolerance: 0.35             # TXT/QGD 时间基偏移容差
+  tic_min: 50000
+
+output:
+  root: results                  # 自动创建 results/00_preflight ... 05_final
+
+workflow:
+  stop_on_gate_failure: true     # 任一 gate 失败立即停止
+  overwrite: false               # true 允许覆盖已有结果目录
