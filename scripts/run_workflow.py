@@ -26,8 +26,9 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
 if "PYTHONIOENCODING" not in os.environ:
     os.environ["PYTHONIOENCODING"] = "utf-8"
 
-STAGES = ["G0", "G1", "G2", "G3", "G4", "G5"]
-STAGE_DIRS = ["00_preflight", "01_clean", "02_verify", "03_ei", "04_tmah", "05_final"]
+STAGES = ["G0", "G1", "G2", "G3", "G4", "G5", "G6"]
+STAGE_DIRS = ["00_preflight", "01_clean", "02_verify", "03_ei", "04_tmah", "05_final",
+              "06_adjudicate"]
 
 
 def load_config(path):
@@ -211,6 +212,20 @@ def main():
     ok = run_stage(cmd5, "Finalize (apply_final.py)", manifest, "G5", out_root, overwrite)
     if not ok and stop_on_fail:
         _finish(manifest, out_root, failed=True); sys.exit(1)
+
+    # ---- G6: per-peak adjudication (optional) ----
+    adj_cfg = cfg.get("adjudicate", {}) or {}
+    if adj_cfg.get("enabled", True):
+        adj_script = os.path.join(here, "adjudicate.py")
+        ok = run_stage([py, adj_script, "--config", os.path.abspath(args.config),
+                        "--out_dir", out_root],
+                       "Per-peak adjudication (adjudicate.py)", manifest, "G6",
+                       out_root, overwrite)
+        if not ok and stop_on_fail:
+            _finish(manifest, out_root, failed=True); sys.exit(1)
+    else:
+        print("\n[G6] SKIP: adjudicate.enabled = false")
+        manifest["stages"]["G6"] = "SKIP"
 
     # ---- manifest ----
     manifest["finished_at"] = datetime.datetime.now().isoformat(timespec="seconds")

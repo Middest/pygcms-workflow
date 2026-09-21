@@ -31,10 +31,37 @@ python pygcms-batch/scripts/resolve_conflicts_ei.py --matrix cleaned/analysis_re
 
 # TMAH 试剂峰谱检（有 QGD 时，严谨性关键）
 python pygcms-batch/scripts/diag_trimethylamine.py --qgd <QGD目录> --txt <TXT目录> --sample_map sample_map.json
+
+# 逐峰判定（识别仲裁；同峰异名 / 候选 SI 接近时必做）
+python pygcms-workflow/scripts/adjudicate.py --config config/config.yaml --out_dir results
 ```
 
 ### 第 3 步：过复核门 → 交付
-每个阶段过对应 QA 门（G0-G9，见 SKILL.md §2），最终交付前过完整 `references/rigor-checklist.md` 清单。
+每个阶段过对应 QA 门（G0-G10，见 SKILL.md §2），最终交付前过完整 `references/rigor-checklist.md` 清单。
+
+## 逐峰判定（阶段 6）解决什么问题
+
+同一色谱峰在不同处理中 NIST 首位候选 (Hit#1) 常常不同；当候选间 SI 很接近时
+（如 92 vs 91），**SI 排序不具区分度**，不能用它决定归属。
+
+`scripts/adjudicate.py` 对**每一个峰**判定「化合物类」，判据按事先确定的优先级施用：
+
+| 优先级 | 判据 |
+|---|---|
+| **P1 谱图证据** | 实测 EI 诊断离子判据（验证一致率：PAH 100%、脂肪酸甲酯 100%、MAH 86%） |
+| **P2 跨处理比对** | 同一馏分内其它处理中质谱最相似的峰（余弦 ≥ `cos_min`，RT 窗 ±`rt_win`）其 Hit#1 的类别 |
+| **P3 兜底** | Hit#1 自身的类别 |
+
+产出 `results/06_adjudicate/`：门判定摘要 + 每馏分的 R 值与类别组成 + **逐峰判定明细 CSV**
+（`rule` 列写明是 P1 / P2 / P3 还是 `isomer-ambiguous`）。
+
+**难降解比例**：`R = PAH + 长链烷烃 + MAH + 烯烃 + 木质素`（V1；V2 把木质素算易降解，两版都报）。
+
+**两条硬边界**：
+1. P2 依赖质谱余弦，**无法区分同分异构体**（C8H10 的二甲苯 vs 环戊二烯类，余弦 0.93–0.95）；
+   此类峰默认不改判并标注 `isomer-ambiguous`，**必须逐条看谱确认**。
+2. 识别判据必须**事先确定、对所有样品统一施用**——不得按预期结论挑选候选
+   （同一操作也能给出相反结果，属把假设写进判据）。
 
 ## 建议的 AI 使用方式
 
@@ -54,11 +81,21 @@ python pygcms-batch/scripts/diag_trimethylamine.py --qgd <QGD目录> --txt <TXT�
 
 **Q: 结果能直接写进论文吗？**
 → 正文用 FINAL 版（人工裁决 + 谱检），补充材料用 deliverable 化合物级明细。
+   与阶段 6 逐峰判定的 R 并列报告；两者差异来自识别口径的部分要说明。
+
+**Q: 明明该是芳香类的峰被判成别的类了，能挑候选改回来吗？**
+→ 可以改，但必须走**统一规则**：用 `adjudicate.py` 的 P1（谱图）或 P2（跨处理比对），
+   并对所有样品一致施用，改判逐条留在 `adjudication_peaks.csv`。
+   **不能**按"哪个候选能让结果符合预期"来挑——原始文件里的 SI 可被复核，
+   而且同一做法反向操作就能得到相反结论。
 
 ## 文件导航
 
 - `SKILL.md` — 工作流主文档（阶段 × 复核门）
-- `references/rigor-checklist.md` — 严谨性自检清单（A-H 八组）
+- `references/rigor-checklist.md` — 严谨性自检清单（A-H 八组；C6-C9 / E6-E7 为识别仲裁项）
 - `references/project-template.md` — 项目骨架模板 + 配置模板
+- `scripts/adjudicate.py` — 阶段 6 逐峰判定（识别仲裁）
+- `scripts/run_workflow.py` — 一键编排（G0-G6）
+- `config/config.example.yaml` — 统一配置（含 `adjudicate:` 段）
 - `../pygcms-batch/` — 核心脚本（pipeline / verify / resolve / diag）
 - `../biochar-soc-knowledge/` — 领域知识与 TG-DSC 交叉验证

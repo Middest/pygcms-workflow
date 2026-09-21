@@ -47,10 +47,11 @@ description: 端到端 Py-GC-MS 数据分析工作流编排器。从 NIST 导出
 阶段 3  EI 冲突裁决（QGD cosine≥0.85）──► 门 G3: UNIFIED/GENUINE_DIFF 合理，批次假象已排查
 阶段 4  TMAH 试剂峰谱检剔除（m/z 58）──► 门 G4: 试剂峰独立于名称剔除，报告 keep/removed 双值
 阶段 5  FINAL 组成（脚本生成）──────► 门 G5: 由脚本产出非手动，Bulk 批次注记保留
-阶段 6  统计 + 多样性 ──────────────► 门 G6: n=1 无推断，bootstrap CI 报告
-阶段 7  TG-DSC 交叉验证 ────────────► 门 G7: 收敛性结论与单方法一致
-阶段 8  交付物四表 ────────────────► 门 G8: 与 FINAL 偏差已说明，0/NA 语义明确
-阶段 9  写作 ─────────────────────► 门 G9: 术语正确，统计约束写入 Methods
+阶段 6  逐峰判定（识别仲裁）─────────► 门 G6: 改判逐条留痕，isomer-ambiguous 已人工确认
+阶段 7  统计 + 多样性 ──────────────► 门 G7: n=1 无推断，bootstrap CI 报告
+阶段 8  TG-DSC 交叉验证 ────────────► 门 G8: 收敛性结论与单方法一致
+阶段 9  交付物四表 ────────────────► 门 G9: 与 FINAL 偏差已说明，0/NA 语义明确
+阶段 10 写作 ─────────────────────► 门 G10: 术语正确，统计约束写入 Methods
 ```
 
 **任一复核门失败** → 停止向下游传递该数据，回到对应阶段修正后重新执行。所有修正必须**重新运行脚本**，禁止交互式改数。
@@ -108,24 +109,62 @@ python <skill_dir>/pygcms-batch/scripts/diag_trimethylamine.py
 - 参考 `correct_final_tma.py`：定向剔除谱证实的试剂峰 + 重归一化，输出 FINAL JSON/MD。
 - **门 G5**：FINAL 由脚本生成（可复现）；与阶段 2 的 v2 组成偏差在注释中说明原因。
 
-### 阶段 6：统计与多样性
+### 阶段 6：逐峰判定（识别仲裁）
+解决一个具体而常见的问题：**同一色谱峰在不同处理中 NIST 首位候选 (Hit#1) 不一致**；
+且候选间 SI 很接近时（如 92 vs 91），SI 排序**不具区分度**——此时不能用 SI 决定归属。
+
+判据按事先确定的优先级施用（对所有峰、所有样品统一）：
+
+| 优先级 | 判据 |
+|---|---|
+| **P1 谱图证据** | 实测 EI 诊断离子判据。已验证与名称判类的一致率：**PAH 100%、脂肪酸甲酯 100%、MAH 86%** |
+| **P2 跨处理比对** | 同一馏分内其它处理中质谱最相似的峰（余弦 ≥ `cos_min`，RT 窗 ±`rt_win`，默认 0.6 min 以容纳跨批漂移）其 Hit#1 的类别 |
+| **P3 兜底** | Hit#1 自身的类别 |
+
+判定只到「**类**」为止——聚合指标（难降解比例、类别组成）只需要类，不需要精确化合物身份。
+
+```bash
+python <skill_dir>/pygcms-workflow/scripts/adjudicate.py --config config/config.yaml --out_dir results
+# 也可由 run_workflow.py 作为 Stage G6 自动执行（config 中 adjudicate.enabled: true）
+#   adjudicate.rt_win / cos_min / allow_isomer_switch / keep_artifacts / fractions
+```
+
+产出（`results/06_adjudicate/`）：
+- `adjudication_summary.md` / `.json` —— 门 G6 判定 + 各馏分 R 摘要
+- `<馏分>/adjudication.md` —— 难降解比例 R、类别组成、改判明细
+- `<馏分>/adjudication_peaks.csv` —— **逐峰判定与依据**（`rule` 列写明 P1/P2/P3 或 isomer-ambiguous）
+- `<馏分>/adjudication_composition.csv`
+
+**难降解比例 R**（Shahriar 2026 降解难易分类）：`R = PAH + 长链烷烃 + MAH + 烯烃 + 木质素`
+（V1；V2 把木质素算作易降解）。**两版都要报**——木质素归属在文献中本身有两版。
+
+- **门 G6**：
+  1. 所有馏分均产出 R(V1)/R(V2) 与逐峰明细；
+  2. `rule` 含 `isomer-ambiguous` 的峰**必须逐条看谱确认**后才能决定是否改判（门判定为 REVIEW）；
+  3. 识别判据事先确定、统一施用——**不得按预期结论挑选候选**（见 §4 一票否决项）。
+
+**P2 的边界**：P2 依赖质谱余弦，**无法区分同分异构体**（如 C8H10 的二甲苯 vs 环戊二烯类，
+余弦可达 0.93–0.95）。工具在「两名称互为对方候选」时默认**不采纳 P2 改判**并标注
+`isomer-ambiguous`；`--allow-isomer-switch` 可强制改判，但必须在报告中说明理由。
+
+### 阶段 7：统计与多样性
 - 计算 Shannon H'、Pielou J'、丰富度 S（用 R 4.x 或 Python 脚本，二选一保持一致性）。
 - 每处理 n=1 → **禁止 ANOVA**；用峰级 bootstrap 95% CI（参考 `bootstrap_rmp_ci.py`）。
-- **门 G6**：报告全部为描述性趋势 + CI，无 p 值推断。
+- **门 G7**：报告全部为描述性趋势 + CI，无 p 值推断。
 
-### 阶段 7：TG-DSC 交叉验证（若有数据）
+### 阶段 8：TG-DSC 交叉验证（若有数据）
 - 读 `biochar-soc-knowledge/references/tgdsc-pygcms-crosswalk.md`，逐条对照：
   ↑PAH/Phenols ↔ ↑TG-T50、↓多糖 ↔ ↓labile、↑N-杂环 ↔ MAOC T50 等。
-- **门 G7**：Py-GC-MS 结论与 TG-DSC 方向一致；矛盾处显式说明。
+- **门 G8**：Py-GC-MS 结论与 TG-DSC 方向一致；矛盾处显式说明。
 
-### 阶段 8：交付物四表
+### 阶段 9：交付物四表
 - 参考 `build_deliverable.py` 生成：
   `01_sample_metadata.csv` / `02_compound_abundance.csv`(+转置) / `03_compound_annotation.csv` / `04_supplementary_notes.md`
-- **门 G8**：交付物（化合物级）与 FINAL（类级，人工裁决版）关系在 04 中说明；0 与 NA 语义明确。
+- **门 G9**：交付物（化合物级）与 FINAL（类级，人工裁决版）关系在 04 中说明；0 与 NA 语义明确。
 
-### 阶段 9：写作
+### 阶段 10：写作
 - `good-story` 提炼叙事 → `nature-writing` 起草 → `r-to-manuscript` 落统计表述。
-- **门 G9**：R_MP 表述为"半定量指示"；n=1 写入 Methods；Bulk 批次假象不解释为剂量效应。
+- **门 G10**：R_MP 表述为"半定量指示"；n=1 写入 Methods；Bulk 批次假象不解释为剂量效应。
 
 ---
 

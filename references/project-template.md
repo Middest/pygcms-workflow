@@ -94,9 +94,11 @@ pause
 6. **跑阶段3**：`resolve_conflicts_ei.py`（有 QGD 时）→ 过门 G3（批次排查）
 7. **跑阶段4**：`diag_trimethylamine.py` → 过门 G4（m/z 58 试剂峰）
 8. **跑阶段5**：`correct_final_tma.py` 生成 FINAL → 过门 G5
-9. **阶段6-7**：统计/多样性 + TG-DSC 交叉 → 过门 G6/G7
-10. **阶段8**：`build_deliverable.py` 生成四表 → 过门 G8
-11. **阶段9**：写作 → 过门 G9
-12. **最终**：过完整 `qa-checklist.md`，存档到项目目录
+9. **跑阶段6**：`adjudicate.py` 逐峰判定（识别仲裁）→ 过门 G6（改判留痕；isomer-ambiguous 逐条看谱）
+10. **阶段7-8**：统计/多样性 + TG-DSC 交叉 → 过门 G7/G8
+11. **阶段9**：`build_deliverable.py` 生成四表 → 过门 G9
+12. **阶段10**：写作 → 过门 G10
+13. **最终**：过完整 `qa-checklist.md`，存档到项目目录
 
-> 每个 `{Fraction}`（Bulk/POC/MAOC）重复步骤 4-8。若只有一个碳库，忽略其余。
+> 每个 `{Fraction}`（Bulk/POC/MAOC）重复步骤 4-6。若只有一个碳库，忽略其余。
+> 阶段 6 也可由 `run_workflow.py` 作为 Stage G6 自动执行（`adjudicate.enabled: true`）。
