@@ -117,22 +117,37 @@ python <skill_dir>/pygcms-batch/scripts/diag_trimethylamine.py
 
 | 优先级 | 判据 |
 |---|---|
+| **P0 SI 硬门槛** | `SI >= 80`（`filters.si_threshold` / `filters.si_operator`）。**无 SI 的峰视为未鉴定，一律剔除** |
 | **P1 谱图证据** | 实测 EI 诊断离子判据。已验证与名称判类的一致率：**PAH 100%、脂肪酸甲酯 100%、MAH 86%** |
 | **P2 跨处理比对** | 同一馏分内其它处理中质谱最相似的峰（余弦 ≥ `cos_min`，RT 窗 ±`rt_win`，默认 0.6 min 以容纳跨批漂移）其 Hit#1 的类别 |
 | **P3 兜底** | Hit#1 自身的类别 |
 
 判定只到「**类**」为止——聚合指标（难降解比例、类别组成）只需要类，不需要精确化合物身份。
 
+**SI 算子必须在看结果前定死**：`'>='` 与 `'>'` 在本项目数据集上相差 **53 个峰（3.34%）**，
+足以静默改变论文里的每一个百分比。实测口径阶梯（1589 峰）：不过滤 100% → `>=70` 82.5%
+→ `>=80` 60.5% → `>80` 57.2% → `>=90` 27.7%。本项目用 `>=`（与历史 SI80 工作簿一致）。
+
+**SI 门槛如何"真正贯穿"**：G6 做两件事，缺一即 FAIL（除非
+`adjudicate.require_si_enforcement: false`）：
+1. 通过 `inspect` 在 `run_fraction` 上找 `si_threshold` / `si_operator` 形参并**传入后端**；
+2. **独立复核**后端返回的每一个峰的 SI —— 不信任后端是否真的执行了；找不到 SI 列也判 FAIL。
+
+后端不支持 SI 形参时不静默通过，而是由第 2 步兜底判 FAIL：**响亮失败优于静默降级**。
+
 ```bash
 python <skill_dir>/pygcms-workflow/scripts/adjudicate.py --config config/config.yaml --out_dir results
 # 也可由 run_workflow.py 作为 Stage G6 自动执行（config 中 adjudicate.enabled: true）
+#   filters.si_threshold / si_operator           SI 硬门槛（唯一来源）
+#   adjudicate.require_si_enforcement            SI 无法落实时 FAIL（默认 true）
 #   adjudicate.rt_win / cos_min / allow_isomer_switch / keep_artifacts / fractions
 ```
 
 产出（`results/06_adjudicate/`）：
-- `adjudication_summary.md` / `.json` —— 门 G6 判定 + 各馏分 R 摘要
-- `<馏分>/adjudication.md` —— 难降解比例 R、类别组成、改判明细
-- `<馏分>/adjudication_peaks.csv` —— **逐峰判定与依据**（`rule` 列写明 P1/P2/P3 或 isomer-ambiguous）
+- `adjudication_summary.md` / `.json` —— 门 G6 判定 + SI 口径 + 各馏分 R 摘要
+- `<馏分>/adjudication.md` —— SI 门槛执行情况、难降解比例 R、类别组成、改判明细
+- `<馏分>/adjudication_peaks.csv` —— **逐峰判定与依据**（含 `si` / `si_pass`；`rule` 列写明 P1/P2/P3 或 isomer-ambiguous）
+- `<馏分>/adjudication_si_gate.csv` —— 逐样品剔除计数（峰表总数 = 面积≤0 + 副产物 + 无 SI + SI 不达标 + 保留）
 - `<馏分>/adjudication_composition.csv`
 
 **难降解比例 R**（Shahriar 2026 降解难易分类）：`R = PAH + 长链烷烃 + MAH + 烯烃 + 木质素`
@@ -140,8 +155,9 @@ python <skill_dir>/pygcms-workflow/scripts/adjudicate.py --config config/config.
 
 - **门 G6**：
   1. 所有馏分均产出 R(V1)/R(V2) 与逐峰明细；
-  2. `rule` 含 `isomer-ambiguous` 的峰**必须逐条看谱确认**后才能决定是否改判（门判定为 REVIEW）；
-  3. 识别判据事先确定、统一施用——**不得按预期结论挑选候选**（见 §4 一票否决项）。
+  2. **SI 门槛已落实且独立复核通过**（否决项：复核不通过即 FAIL，不允许"配置写了就算"）；
+  3. `rule` 含 `isomer-ambiguous` 的峰**必须逐条看谱确认**后才能决定是否改判（门判定为 REVIEW）；
+  4. 识别判据事先确定、统一施用——**不得按预期结论挑选候选**（见 §4 一票否决项）。
 
 **P2 的边界**：P2 依赖质谱余弦，**无法区分同分异构体**（如 C8H10 的二甲苯 vs 环戊二烯类，
 余弦可达 0.93–0.95）。工具在「两名称互为对方候选」时默认**不采纳 P2 改判**并标注

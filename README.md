@@ -48,12 +48,26 @@ python pygcms-workflow/scripts/adjudicate.py --config config/config.yaml --out_d
 
 | 优先级 | 判据 |
 |---|---|
+| **P0 SI 硬门槛** | `SI >= 80`（`filters.si_threshold` / `filters.si_operator`）；无 SI 的峰视为未鉴定，一律剔除 |
 | **P1 谱图证据** | 实测 EI 诊断离子判据（验证一致率：PAH 100%、脂肪酸甲酯 100%、MAH 86%） |
 | **P2 跨处理比对** | 同一馏分内其它处理中质谱最相似的峰（余弦 ≥ `cos_min`，RT 窗 ±`rt_win`）其 Hit#1 的类别 |
 | **P3 兜底** | Hit#1 自身的类别 |
 
 产出 `results/06_adjudicate/`：门判定摘要 + 每馏分的 R 值与类别组成 + **逐峰判定明细 CSV**
-（`rule` 列写明是 P1 / P2 / P3 还是 `isomer-ambiguous`）。
+（`rule` 列写明是 P1 / P2 / P3 还是 `isomer-ambiguous`）+ `adjudication_si_gate.csv`
+（逐样品剔除计数：峰表总数 = 面积≤0 + 副产物 + 无 SI + SI 不达标 + 保留）。
+
+### SI 门槛如何"真正贯穿"（而不是看起来生效）
+
+SI 口径必须在看结果前定死：`'>='` 与 `'>'` 在本项目数据集上相差 **53 个峰（3.34%）**，
+足以静默改变论文里的每一个百分比。G6 做两件事，**缺一即 FAIL**（除非
+`adjudicate.require_si_enforcement: false`）：
+
+1. **传给后端** —— 通过 `inspect` 在 `run_fraction` 上找 `si_threshold` / `si_operator` 形参并传入；
+2. **独立复核** —— 逐峰检查后端返回结果里的 SI 列，**不信任后端是否真的执行了**；
+   找不到 SI 列也判 FAIL（不能假设）。
+
+后端不支持 SI 形参时不会静默通过，而是由第 2 步兜底判 FAIL——**响亮失败优于静默降级**。
 
 **难降解比例**：`R = PAH + 长链烷烃 + MAH + 烯烃 + 木质素`（V1；V2 把木质素算易降解，两版都报）。
 
@@ -89,13 +103,28 @@ python pygcms-workflow/scripts/adjudicate.py --config config/config.yaml --out_d
    **不能**按"哪个候选能让结果符合预期"来挑——原始文件里的 SI 可被复核，
    而且同一做法反向操作就能得到相反结论。
 
+**Q: SI 门槛到底该用 `>` 还是 `>=`？为什么这么较真？**
+→ 因为两者在本项目数据集上相差 **53 个峰（3.34%）**，会静默改变论文里的每一个百分比。
+   必须在看结果前定死，并写进 `filters.si_operator`（本项目用 `>=`，与历史 SI80 工作簿一致）。
+   G6 会**独立复核**每个返回峰的 SI，通不过直接 FAIL——避免"配置写了但没生效"。
+
+**Q: 为什么没有 PyYAML 时不能退回手写解析？**
+→ 手写解析把 `false` 变成字符串 `"false"`，而 `bool("false") == True`。
+   后果是 `enabled: false` 阶段照跑、`allow_isomer_switch: false` 被静默打开、
+   `keep_artifacts: false` 副产物被静默保留。科研流程里这种静默错误比直接报错危险得多，
+   因此 `config_utils.load_config` 强制依赖 PyYAML，缺失即抛错。
+
 ## 文件导航
 
 - `SKILL.md` — 工作流主文档（阶段 × 复核门）
 - `references/rigor-checklist.md` — 严谨性自检清单（A-H 八组；C6-C9 / E6-E7 为识别仲裁项）
 - `references/project-template.md` — 项目骨架模板 + 配置模板
-- `scripts/adjudicate.py` — 阶段 6 逐峰判定（识别仲裁）
-- `scripts/run_workflow.py` — 一键编排（G0-G6）
-- `config/config.example.yaml` — 统一配置（含 `adjudicate:` 段）
+- `scripts/config_utils.py` — 配置读取与 SI 门槛的**唯一来源**（强制 PyYAML）
+- `scripts/adjudicate.py` — 阶段 6 逐峰判定（识别仲裁 + SI 门槛复核）
+- `scripts/preflight.py` — 阶段 0 输入检查（含 SI 口径检查）
+- `scripts/run_workflow.py` — 一键编排（G0-G6；退出码 0=PASS / 2=REVIEW / 1=FAIL）
+- `scripts/apply_final.py` — 阶段 5 FINAL 收口
+- `tests/` — 回归测试（配置布尔正确性、SI 门槛复核、退出码语义）
+- `config/config.example.yaml` — 统一配置（含 `filters.si_operator` 与 `adjudicate:` 段）
 - `../pygcms-batch/` — 核心脚本（pipeline / verify / resolve / diag）
 - `../biochar-soc-knowledge/` — 领域知识与 TG-DSC 交叉验证

@@ -30,28 +30,17 @@ STAGES = ["G0", "G1", "G2", "G3", "G4", "G5", "G6"]
 STAGE_DIRS = ["00_preflight", "01_clean", "02_verify", "03_ei", "04_tmah", "05_final",
               "06_adjudicate"]
 
-
-def load_config(path):
-    try:
-        import yaml
-        with open(path, encoding="utf-8") as f:
-            return yaml.safe_load(f)
-    except ImportError:
-        cfg, cur = {}, None
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.split("#")[0].rstrip()
-                if not line.strip():
-                    continue
-                if not line.startswith(" ") and ":" in line:
-                    cur = cfg[line.split(":", 1)[0].strip()] = {}
-                elif cur is not None and ":" in line:
-                    k, v = line.split(":", 1)
-                    cur[k.strip()] = v.strip()
-        return cfg
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config_utils import (load_config, get_si_rule, si_rule_text,  # noqa: E402
+                          DEFAULT_SI_THRESHOLD)
 
 
 def run_stage(cmd, label, manifest, stage, out_root, overwrite):
+    """执行一个阶段。
+
+    退出码约定（与 adjudicate.py 等阶段脚本一致）：
+        0 = PASS       2 = REVIEW（需人工介入，但不是失败）       其他 = FAIL
+    """
     print(f"\n{'='*70}\n[{stage}] {label}\n{'='*70}")
     # overwrite guard: refuse to clobber existing stage output unless allowed
     stage_dir = os.path.join(out_root, STAGE_DIRS[STAGES.index(stage)])
@@ -60,6 +49,11 @@ def run_stage(cmd, label, manifest, stage, out_root, overwrite):
         manifest["stages"][stage] = "SKIP"
         return True
     proc = subprocess.run(cmd, shell=False)
+    if proc.returncode == 2:
+        print(f"\n[{stage}] REVIEW ({label}) — 需人工复核，不阻断后续阶段")
+        manifest["stages"][stage] = "REVIEW"
+        manifest.setdefault("review_stages", []).append(stage)
+        return True
     if proc.returncode != 0:
         print(f"\n[{stage}] FAIL ({label})")
         manifest["stages"][stage] = "FAIL"
@@ -109,12 +103,16 @@ def main():
     py = sys.executable
     smap_path = inp.get("sample_map", "")
     smap_abs = os.path.abspath(smap_path) if smap_path else ""
+    si_threshold, si_operator = get_si_rule(cfg)
+    print(f"SI 硬门槛 (filters): {si_rule_text(si_threshold, si_operator)}")
     manifest = {
         "project": cfg.get("project", {}).get("name", "pygcms_project"),
         "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
         "config": os.path.abspath(args.config),
         "parameters": {
-            "si_threshold": flt.get("si_threshold", 70),
+            "si_threshold": si_threshold,
+            "si_operator": si_operator,
+            "si_rule": si_rule_text(si_threshold, si_operator),
             "rt_tolerance": aln.get("rt_tolerance", 0.10),
             "ei_cosine": ei.get("cosine_threshold", 0.85),
             "tmah_mz58_fraction": tmah.get("mz58_fraction_threshold", 0.12),
@@ -139,8 +137,9 @@ def main():
     pipe = os.path.join(batch, "pipeline.py")
     g1_out = os.path.join(out_root, "01_clean")
     cmd1 = [py, pipe, "--input", os.path.abspath(inp.get("txt_dir", "")),
-            "--output", g1_out, "--sample_map", smap_abs,
-            "--si_threshold", str(flt.get("si_threshold", 70))]
+            "--output", g1_out, "--sample_map", smap_abs]
+    if si_threshold is not None:
+        cmd1 += ["--si_threshold", f"{si_threshold:g}"]
     if not flt.get("remove_contaminants", True):
         cmd1.append("--keep_contaminants")
     if not flt.get("remove_tmah_by_name", True):
@@ -229,14 +228,22 @@ def main():
 
     # ---- manifest ----
     manifest["finished_at"] = datetime.datetime.now().isoformat(timespec="seconds")
-    manifest["overall"] = "PASS" if all(
-        s == "PASS" for s in manifest["stages"].values()) else "PARTIAL"
+    states = list(manifest["stages"].values())
+    if "FAIL" in states:
+        manifest["overall"] = "FAIL"
+    elif "REVIEW" in states:
+        manifest["overall"] = "REVIEW"
+    elif all(s in ("PASS", "SKIP") for s in states):
+        manifest["overall"] = "PASS"
+    else:
+        manifest["overall"] = "PARTIAL"
     _finish(manifest, out_root, failed=False)
     print(f"\nWorkflow complete. Overall: {manifest['overall']}")
+    print(f"SI 口径: {manifest['parameters']['si_rule']}")
     print(f"Final: {os.path.join(out_root, '05_final', 'features_final.csv')}")
     print(f"       {os.path.join(out_root, '05_final', 'class_composition_final.csv')}")
     print(f"       {os.path.join(out_root, 'run_manifest.json')}")
-    sys.exit(0 if manifest["overall"] == "PASS" else 1)
+    sys.exit({"PASS": 0, "REVIEW": 2}.get(manifest["overall"], 1))
 
 
 def _finish(manifest, out_root, failed=False):

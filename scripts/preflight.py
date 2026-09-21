@@ -9,6 +9,9 @@
 """
 import os, sys, json, importlib, argparse
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from config_utils import load_config, get_si_rule, si_rule_text, resolve_path  # noqa: E402
+
 # Windows GBK 控制台无法打印部分 Unicode 字符（如中文路径），强制 UTF-8 输出
 if sys.stdout and hasattr(sys.stdout, "reconfigure"):
     try:
@@ -16,30 +19,6 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
-
-def load_config(path):
-    """加载 YAML 配置（无 pyyaml 时用极简解析器）。"""
-    try:
-        import yaml
-        with open(path, encoding="utf-8") as f:
-            return yaml.safe_load(f)
-    except ImportError:
-        # 极简 fallback：只解析顶层键与二级键（本项目配置足够）
-        cfg = {}
-        cur = cfg
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.split("#")[0].rstrip()
-                if not line.strip():
-                    continue
-                indent = len(line) - len(line.lstrip())
-                if indent == 0 and ":" in line:
-                    k = line.split(":", 1)[0].strip()
-                    cur = cfg[k] = {}
-                elif indent > 0 and ":" in line:
-                    k, v = line.split(":", 1)
-                    cur[k.strip()] = v.strip()
-        return cfg
 
 
 def main():
@@ -50,9 +29,10 @@ def main():
 
     cfg = load_config(args.config)
     inp = cfg.get("input", {})
-    txt_dir = inp.get("txt_dir", "")
-    qgd_dir = inp.get("qgd_dir", "")
-    sample_map_path = inp.get("sample_map", "")
+    # 相对路径一律从项目根解析（config/ 下的配置 → 项目根），避免依赖当前工作目录
+    txt_dir = resolve_path(args.config, inp.get("txt_dir", ""))
+    qgd_dir = resolve_path(args.config, inp.get("qgd_dir", ""))
+    sample_map_path = resolve_path(args.config, inp.get("sample_map", ""))
     out_root = args.out_dir
 
     report = {
@@ -118,11 +98,25 @@ def main():
     except OSError as e:
         check("out_dir_writable", False, str(e))
 
-    # 8. Python 依赖
-    deps = ["openpyxl", "olefile"]
+    # 8. Python 依赖（yaml 为硬依赖：手写回退会把 'false' 误当真值）
+    deps = ["openpyxl", "olefile", "yaml"]
     missing_deps = [d for d in deps if importlib.util.find_spec(d) is None]
     check("python_deps", len(missing_deps) == 0,
           f"missing: {missing_deps}" if missing_deps else "deps OK")
+
+    # 9. SI 硬门槛口径（必须在看结果前定死，且全库统一）
+    try:
+        si_thr, si_op = get_si_rule(cfg)
+        si_text = si_rule_text(si_thr, si_op)
+        si_ok = True
+        si_detail = si_text
+    except Exception as exc:
+        si_thr, si_op, si_text = None, ">=", ""
+        si_ok, si_detail = False, f"SI 口径配置非法: {exc}"
+    check("si_rule_defined", si_ok, si_detail)
+    report["si_rule"] = si_text
+    report["si_threshold"] = si_thr
+    report["si_operator"] = si_op
 
     # 汇总
     report["status"] = "PASS" if not problems else "FAIL"

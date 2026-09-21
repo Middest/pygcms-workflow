@@ -11,7 +11,12 @@ input:
   sample_map: config/sample_map.json
 
 filters:
-  si_threshold: 70               # 唯一 SI 阈值来源（不要在各脚本中硬编码 70/80/90）
+  si_threshold: 80               # 唯一 SI 阈值来源（不要在各脚本中硬编码 70/80/90）
+  # 算子必须在看结果前定死。'>=' 与 '>' 在本项目数据集上相差 53 峰（3.34%），
+  # 会静默改变论文里的每一个百分比。
+  #   '>='  本项目口径（与历史 MAOC_PyGCMS_SI80_* / POC_PyGCMS_SI80_* 工作簿一致）
+  #   '>'   严格大于（整合版 GPT 的默认，仅在你确认历史工作簿也是严格口径时使用）
+  si_operator: ">="
   remove_contaminants: true
   remove_tmah_by_name: true      # 名称剔除（TMAH_ARTIFACTS 列表）
   renormalize: true
@@ -38,12 +43,15 @@ output:
 
 adjudicate:                      # Stage 6 逐峰判定（识别仲裁）
   enabled: true
-  pygcms_path: F:/deepseekharness/pygcms   # pygcms 工具链路径（或用环境变量 PYGCMS_HOME）
+  require_si_enforcement: true   # SI 门槛无法落实/复核不通过时 G6 判 FAIL（默认 true）
+  # pygcms 工具链路径（优先用环境变量 PYGCMS_HOME；不要硬编码机器路径）
+  # pygcms_path: ../pygcms
   rt_win: 0.6                    # P2 跨处理比对的 RT 窗口（min；跨批次数据需放宽）
   cos_min: 0.90                  # P2 的质谱余弦阈值
   allow_isomer_switch: false     # true 允许对同分异构体歧义的峰改判（默认不采纳）
   keep_artifacts: false          # true 保留 TMAH/衍生化副产物（默认剔除）
   # 每个馏分：处理名 -> TXT 路径（相对项目根）。未提供时用 input.txt_dir + sample_map 视为单馏分。
+  # 注意：不要用 .TXT/.txt 大小写来区分 POC 与 MAOC —— Windows 下二者是同一个文件。
   fractions:
     POC:
       CK:    data/raw/txt/5.TXT
