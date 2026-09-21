@@ -35,11 +35,14 @@ from config_utils import (load_config, get_si_rule, si_rule_text,  # noqa: E402
                           DEFAULT_SI_THRESHOLD)
 
 
-def run_stage(cmd, label, manifest, stage, out_root, overwrite):
+def run_stage(cmd, label, manifest, stage, out_root, overwrite, env=None):
     """执行一个阶段。
 
     退出码约定（与 adjudicate.py 等阶段脚本一致）：
         0 = PASS       2 = REVIEW（需人工介入，但不是失败）       其他 = FAIL
+
+    env: 传给子进程的环境变量。用于把 pygcms-batch/scripts 放到 PYTHONPATH，
+         这样 G5 (apply_final.py) 等依赖 batch 模块的阶段不必靠相对路径碰运气。
     """
     print(f"\n{'='*70}\n[{stage}] {label}\n{'='*70}")
     # overwrite guard: refuse to clobber existing stage output unless allowed
@@ -48,7 +51,7 @@ def run_stage(cmd, label, manifest, stage, out_root, overwrite):
         print(f"[{stage}] SKIP: {stage_dir} exists (set workflow.overwrite=true to rerun)")
         manifest["stages"][stage] = "SKIP"
         return True
-    proc = subprocess.run(cmd, shell=False)
+    proc = subprocess.run(cmd, shell=False, env=env)
     if proc.returncode == 2:
         print(f"\n[{stage}] REVIEW ({label}) — 需人工复核，不阻断后续阶段")
         manifest["stages"][stage] = "REVIEW"
@@ -100,6 +103,15 @@ def main():
     batch = os.path.abspath(batch)
     print(f"pygcms-batch scripts: {batch}")
 
+    # 让所有子进程都能 import batch 模块（G5 apply_final.py 依赖 pipeline 的
+    # load_shahriar_library / classify_compound）。此前 G5 只能靠相对路径碰运气，
+    # 在 batch 与 workflow 不在同一父目录时必然失败。
+    child_env = os.environ.copy()
+    child_env["PYGCMS_BATCH_HOME"] = batch
+    _pp = child_env.get("PYTHONPATH", "")
+    if batch not in _pp.split(os.pathsep):
+        child_env["PYTHONPATH"] = batch + (os.pathsep + _pp if _pp else "")
+
     py = sys.executable
     smap_path = inp.get("sample_map", "")
     smap_abs = os.path.abspath(smap_path) if smap_path else ""
@@ -129,7 +141,7 @@ def main():
     # ---- G0: preflight ----
     pre = os.path.join(here, "preflight.py")
     ok = run_stage([py, pre, "--config", os.path.abspath(args.config), "--out_dir", out_root],
-                   "Preflight", manifest, "G0", out_root, overwrite)
+                   "Preflight", manifest, "G0", out_root, overwrite, env=child_env)
     if not ok and stop_on_fail:
         _finish(manifest, out_root, failed=True); sys.exit(1)
 
@@ -139,7 +151,7 @@ def main():
     cmd1 = [py, pipe, "--input", os.path.abspath(inp.get("txt_dir", "")),
             "--output", g1_out, "--sample_map", smap_abs]
     if si_threshold is not None:
-        cmd1 += ["--si_threshold", f"{si_threshold:g}"]
+        cmd1 += ["--si_threshold", f"{si_threshold:g}", "--si_operator", si_operator]
     if not flt.get("remove_contaminants", True):
         cmd1.append("--keep_contaminants")
     if not flt.get("remove_tmah_by_name", True):
@@ -148,7 +160,7 @@ def main():
         cmd1.append("--no_renormalize")
     if aln.get("reference_sample"):
         cmd1 += ["--reference", str(aln["reference_sample"])]
-    ok = run_stage(cmd1, "Parse & Clean (pipeline.py)", manifest, "G1", out_root, overwrite)
+    ok = run_stage(cmd1, "Parse & Clean (pipeline.py)", manifest, "G1", out_root, overwrite, env=child_env)
     if not ok and stop_on_fail:
         _finish(manifest, out_root, failed=True); sys.exit(1)
 
@@ -157,9 +169,12 @@ def main():
     g2_out = os.path.join(out_root, "02_verify")
     cmd2 = [py, verify, "--input", os.path.abspath(inp.get("txt_dir", "")),
             "--output", g2_out, "--sample_map", smap_abs]
+    # G2 必须与 G1 用同一 SI 口径（此前 G2 完全没有 SI 参数，报告里硬编码 80/90/70）
+    if si_threshold is not None:
+        cmd2 += ["--si_threshold", f"{si_threshold:g}", "--si_operator", si_operator]
     if inp.get("qgd_dir") and ei.get("enabled", True):
         cmd2 += ["--qgd", os.path.abspath(inp["qgd_dir"])]
-    ok = run_stage(cmd2, "Verification (verify_data.py)", manifest, "G2", out_root, overwrite)
+    ok = run_stage(cmd2, "Verification (verify_data.py)", manifest, "G2", out_root, overwrite, env=child_env)
     if not ok and stop_on_fail:
         _finish(manifest, out_root, failed=True); sys.exit(1)
 
@@ -171,7 +186,7 @@ def main():
         cmd3 = [py, resolve, "--matrix", matrix, "--qgd", os.path.abspath(inp["qgd_dir"]),
                 "--sample_map", smap_abs, "--cosine", str(ei.get("cosine_threshold", 0.85)),
                 "--top_ions", str(ei.get("top_ions", 12)), "--output", g3_out]
-        ok = run_stage(cmd3, "EI Resolution (resolve_conflicts_ei.py)", manifest, "G3", out_root, overwrite)
+        ok = run_stage(cmd3, "EI Resolution (resolve_conflicts_ei.py)", manifest, "G3", out_root, overwrite, env=child_env)
         if not ok and stop_on_fail:
             _finish(manifest, out_root, failed=True); sys.exit(1)
     else:
@@ -189,7 +204,7 @@ def main():
                 "--rt_tolerance", str(tmah.get("rt_tolerance", 0.35)),
                 "--tic_min", str(tmah.get("tic_min", 50000)),
                 "--output", g4_out]
-        ok = run_stage(cmd4, "TMAH Spectral Check (diag_trimethylamine.py)", manifest, "G4", out_root, overwrite)
+        ok = run_stage(cmd4, "TMAH Spectral Check (diag_trimethylamine.py)", manifest, "G4", out_root, overwrite, env=child_env)
         if not ok and stop_on_fail:
             _finish(manifest, out_root, failed=True); sys.exit(1)
     else:
@@ -208,7 +223,7 @@ def main():
     tmah_csv = os.path.join(out_root, "04_tmah", "tmah_decisions.csv")
     if manifest["stages"].get("G4") == "PASS" and os.path.exists(tmah_csv):
         cmd5 += ["--tmah", tmah_csv]
-    ok = run_stage(cmd5, "Finalize (apply_final.py)", manifest, "G5", out_root, overwrite)
+    ok = run_stage(cmd5, "Finalize (apply_final.py)", manifest, "G5", out_root, overwrite, env=child_env)
     if not ok and stop_on_fail:
         _finish(manifest, out_root, failed=True); sys.exit(1)
 
@@ -219,7 +234,7 @@ def main():
         ok = run_stage([py, adj_script, "--config", os.path.abspath(args.config),
                         "--out_dir", out_root],
                        "Per-peak adjudication (adjudicate.py)", manifest, "G6",
-                       out_root, overwrite)
+                       out_root, overwrite, env=child_env)
         if not ok and stop_on_fail:
             _finish(manifest, out_root, failed=True); sys.exit(1)
     else:

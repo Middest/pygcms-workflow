@@ -32,16 +32,29 @@ from collections import defaultdict, Counter
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _BATCH_CANDIDATES = [
+    os.environ.get("PYGCMS_BATCH_HOME") or "",                     # 由 run_workflow.py 传入
     os.path.join(_HERE, "..", "..", "pygcms-batch", "scripts"),   # .claude/skills layout
     os.path.join(_HERE, "..", "pygcms-batch", "scripts"),
     os.path.join(_HERE, "pygcms-batch", "scripts"),
     os.path.join(_HERE, "..", "pygcms-batch"),                    # repo layout
 ]
+# 也接受已在 PYTHONPATH 上的位置
+_BATCH_CANDIDATES += [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p]
 _BATCH = next((c for c in _BATCH_CANDIDATES
-               if os.path.isfile(os.path.join(c, "pipeline.py"))), None)
-if _BATCH:
+               if c and os.path.isfile(os.path.join(c, "pipeline.py"))), None)
+if _BATCH and _BATCH not in sys.path:
     sys.path.insert(0, _BATCH)
-from pipeline import load_shahriar_library, classify_compound
+try:
+    from pipeline import load_shahriar_library, classify_compound
+except ImportError as exc:  # 响亮失败，不要带着错误分类继续跑
+    raise SystemExit(
+        "apply_final.py 需要 pygcms-batch 的 pipeline.py（用于 load_shahriar_library / "
+        "classify_compound）。\n"
+        f"已尝试: {[c for c in _BATCH_CANDIDATES if c]}\n"
+        "请设置环境变量 PYGCMS_BATCH_HOME=<pygcms-batch/scripts>，或用 "
+        "run_workflow.py --batch_scripts <dir> 运行（它会自动传递给各阶段）。\n"
+        f"原始错误: {exc}"
+    )
 
 
 def read_csv_rows(path):
